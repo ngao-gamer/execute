@@ -1,0 +1,90 @@
+local TweenService = game:GetService('TweenService') 
+local RunService = game:GetService('RunService')
+
+local Player = game:GetService('Players').LocalPlayer
+local PlayerGui = Player:WaitForChild('PlayerGui')
+local NotificationPrefix = 'ExecutedNotification_'
+local MaxNotifications = 4
+
+-- 1. KIỂM TRA VÀ HỦY THÔNG BÁO CŨ NHẤT NẾU VƯỢT QUÁ GIỚI HẠN (MAX 4)
+local existingCount = 0
+local oldestNotification = nil 
+
+for _, child in ipairs(PlayerGui:GetChildren()) do
+    -- Kiểm tra tiền tố và loại đối tượng
+    if child.Name:sub(1, #NotificationPrefix) == NotificationPrefix and child:IsA('ScreenGui') then
+        existingCount = existingCount + 1
+        -- Giữ lại tham chiếu đến thông báo đầu tiên tìm thấy (được coi là 'oldest' để hủy)
+        if oldestNotification == nil then
+            oldestNotification = child 
+        end
+    end
+end
+
+if existingCount >= MaxNotifications and oldestNotification then
+    oldestNotification:Destroy() -- Hủy thông báo cũ nhất (đã được tìm thấy đầu tiên)
+end
+
+-- 2. TẠO THÔNG BÁO MỚI 
+local Notification = Instance.new('ScreenGui')
+-- Gán tên duy nhất để theo dõi (dùng tick() để đảm bảo tính duy nhất)
+Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000))
+Notification.DisplayOrder = 999 
+
+-- Khung chính của thông báo (Frame)
+local Frame = Instance.new('Frame')
+Frame.Size = UDim2.new(0, 300, 0, 80) -- Kích thước đã điều chỉnh
+Frame.Position = UDim2.new(1, -320, 1, -100) -- Vị trí góc dưới bên phải
+Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+Frame.BorderSizePixel = 3 -- Độ dày viền 3px
+Frame.BorderColor3 = Color3.fromRGB(30, 144, 255) -- DodgerBlue
+Frame.Draggable = true 
+Frame.Parent = Notification
+
+-- Thêm góc bo tròn (UI Corner)
+local Corner = Instance.new('UICorner')
+Corner.CornerRadius = UDim.new(0, 8) 
+Corner.Parent = Frame
+
+-- Label Nội dung chính: Executed ✓
+local Content = Instance.new('TextLabel')
+Content.Text = 'Executed ✓'
+Content.TextColor3 = Color3.fromRGB(50, 255, 50) -- Màu xanh lá cây sáng cho chữ 'Executed'
+Content.TextSize = 20
+Content.Font = Enum.Font.SourceSansBold
+Content.BackgroundTransparency = 1
+Content.Size = UDim2.new(1, 0, 1, 0)
+Content.Position = UDim2.new(0, 0, 0, 0)
+Content.Parent = Frame
+
+-- Hàm xử lý hiệu ứng đóng (Tweening)
+local function dismissNotification()
+    if not Frame.Parent then return end 
+
+    local DismissTime = 0.3
+    local DismissInfo = TweenInfo.new(DismissTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    
+    local Goal = {
+        Position = UDim2.new(1.1, 0, Frame.Position.Y.Scale, Frame.Position.Y.Offset) 
+    }
+    
+    local Tween = TweenService:Create(Frame, DismissInfo, Goal)
+    Tween:Play()
+    
+    Tween.Completed:Wait() 
+    Notification:Destroy()
+end
+
+Notification.Parent = PlayerGui
+
+-- Tự động đóng sau 3 giây với hiệu ứng
+local startTime = tick()
+local connection
+connection = RunService.Stepped:Connect(function()
+    if tick() - startTime >= 3 and Frame.Parent then
+        connection:Disconnect()
+        dismissNotification()
+    elseif not Frame.Parent then
+        connection:Disconnect()
+    end
+end)
