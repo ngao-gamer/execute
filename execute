@@ -1,171 +1,220 @@
 local TweenService = game:GetService('TweenService') 
 local RunService = game:GetService('RunService')
+local Players = game:GetService('Players')
 
-local Player = game:GetService('Players').LocalPlayer
+local Player = Players.LocalPlayer
 local PlayerGui = Player:WaitForChild('PlayerGui')
 local NotificationPrefix = 'ExecutedNotification_'
-local MaxNotifications = 3 -- Giới hạn 3 thông báo
+local MaxNotifications = 3 -- GIỚI HẠN TỐI ĐA 3 THÔNG BÁO
 local Duration = 2 -- Thời gian hiển thị 2 giây
-local StackOffset = 10 -- Khoảng cách giữa các thông báo
+local FrameHeight = 45 -- Chiều cao cố định của Frame
+local Padding = 10 -- Khoảng cách giữa các thông báo
 
--- 1. TÌM VÀ SẮP XẾP THÔNG BÁO HIỆN TẠI
--- Trả về một mảng chứa tất cả ScreenGui thông báo hiện tại
-local function getExistingNotifications()
-    local notifications = {}
+-- Mảng theo dõi các thông báo đang tồn tại (Sử dụng ScreenGui làm key, nil làm value)
+-- **Quan trọng:** Dùng để theo dõi thứ tự và sự tồn tại của các thông báo
+local ActiveNotifications = {} 
+
+-- Tính toán vị trí Y cuối cùng của thông báo thứ N (tính từ trên xuống)
+local function getTargetPosition(index)
+    -- Vị trí gốc (Top Right): UDim2.new(1, -320, 0, 20)
+    -- Vị trí dịch chuyển xuống: index * (FrameHeight + Padding)
+    local yOffset = 20 + (index - 1) * (FrameHeight + Padding)
+    return UDim2.new(1, -270, 0, yOffset) -- Rộng 250px -> offset -270 (250 + 20 margin)
+end
+
+-- Hàm quan trọng: Tính toán lại và Dịch chuyển tất cả thông báo lên/xuống
+local function recalculateAndShiftAll()
+    -- Lấy tất cả các ScreenGui đang tồn tại có tiền tố
+    local currentNotifications = {}
     for _, child in ipairs(PlayerGui:GetChildren()) do
         if child.Name:sub(1, #NotificationPrefix) == NotificationPrefix and child:IsA('ScreenGui') then
-            table.insert(notifications, child)
+            table.insert(currentNotifications, child)
         end
     end
-    -- Sắp xếp theo vị trí Y (từ trên xuống dưới)
-    table.sort(notifications, function(a, b)
-        return a.Frame.Position.Y.Offset < b.Frame.Position.Y.Offset
+
+    -- Sắp xếp chúng theo thứ tự tạo (DisplayName, giả sử tick() là tăng dần)
+    table.sort(currentNotifications, function(a, b)
+        return tonumber(a.Name:gsub(NotificationPrefix, '')) < tonumber(b.Name:gsub(NotificationPrefix, ''))
     end)
-    return notifications
-end
-
--- 2. DỊCH CHUYỂN CÁC THÔNG BÁO LÊN (SHIFT-UP ANIMATION)
-local function shiftNotificationsUp(yOffsetToFill)
-    local notifications = getExistingNotifications()
-    local shiftAmount = Frame.Size.Y.Offset + StackOffset -- Chiều cao thông báo + khoảng cách
     
-    for _, notif in ipairs(notifications) do
-        -- Chỉ dịch chuyển các thông báo nằm dưới khoảng trống
-        if notif.Frame.Position.Y.Offset > yOffsetToFill then
-             local newY = notif.Frame.Position.Y.Offset - shiftAmount
-             local TweenInfoShift = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-             local TweenShift = TweenService:Create(notif.Frame, TweenInfoShift, {Position = UDim2.new(notif.Frame.Position.X.Scale, notif.Frame.Position.X.Offset, 0, newY)})
-             TweenShift:Play()
+    -- Áp dụng Tween cho từng thông báo để dịch chuyển lên
+    for index, notification in ipairs(currentNotifications) do
+        local frame = notification:FindFirstChild('Frame')
+        if frame then
+            local targetPos = getTargetPosition(index)
+            local ShiftInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            TweenService:Create(frame, ShiftInfo, { Position = targetPos }):Play()
+        end
+    end
+    
+    -- Quản lý giới hạn tối đa (MaxNotifications)
+    if #currentNotifications > MaxNotifications then
+        -- Lấy thông báo cũ nhất (thông báo đầu tiên trong mảng đã sắp xếp)
+        local oldest = currentNotifications[1]
+        if oldest then
+            -- Tắt ngay lập tức để tạo chỗ trống
+            local frame = oldest:FindFirstChild('Frame')
+            if frame then
+                frame.Visible = false
+            end
+            oldest:Destroy()
+            -- Sau khi hủy, hàm này sẽ tự gọi lại (hoặc được gọi ngay sau đó)
+            -- để dịch chuyển các thông báo còn lại lên, nhưng logic tiếp theo sẽ đảm bảo điều đó.
         end
     end
 end
 
--- 3. KIỂM TRA GIỚI HẠN VÀ HỦY CŨ NHẤT
-local notifications = getExistingNotifications()
+-- Hàm xử lý hiệu ứng đóng (Tweening) và dọn dẹp
+local function dismissNotification(notification)
+    local Frame = notification:FindFirstChild('Frame')
+    if not Frame or not Frame.Parent then return end 
 
-if #notifications >= MaxNotifications then
-    local oldestNotification = notifications[1] -- Thông báo trên cùng (cũ nhất)
+    -- BƯỚC 1: Prep-Exit (Nhún nhẹ ra ngoài)
+    local PrepExitTime = 0.15
+    local PrepExitInfo = TweenInfo.new(PrepExitTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     
-    -- Ghi lại vị trí Y để biết khoảng trống cần lấp đầy
-    local yToFill = oldestNotification.Frame.Position.Y.Offset
+    local PrepExitGoal = {
+        Position = UDim2.new(1.05, -270, Frame.Position.Y.Scale, Frame.Position.Y.Offset) 
+    }
     
-    -- Hủy thông báo cũ nhất
-    oldestNotification:Destroy() 
+    local PrepExitTween = TweenService:Create(Frame, PrepExitInfo, PrepExitGoal)
+    PrepExitTween:Play()
+    PrepExitTween.Completed:Wait() 
     
-    -- Sau khi hủy, dịch chuyển tất cả thông báo khác lên (sẽ được gọi lại sau khi thông báo mới xuất hiện)
-    -- **LƯU Ý:** Hàm shiftNotificationsUp sẽ được gọi lại sau khi thông báo mới xuất hiện để xử lý khoảng trống.
-end
-
--- 4. TÍNH TOÁN VỊ TRÍ MỚI VÀ TẠO THÔNG BÁO MỚI
-local notificationsAfterCleanup = getExistingNotifications()
-local newYOffset = 20 -- Vị trí Y ban đầu (cách đỉnh 20px)
-
-if #notificationsAfterCleanup > 0 then
-    -- Nếu có thông báo, đặt thông báo mới ngay dưới thông báo thấp nhất
-    local lastNotifFrame = notificationsAfterCleanup[#notificationsAfterCleanup].Frame
-    newYOffset = lastNotifFrame.Position.Y.Offset + lastNotifFrame.Size.Y.Offset + StackOffset
-end
-
-local Notification = Instance.new('ScreenGui')
-Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000))
-Notification.DisplayOrder = 999 
-
-local Frame = Instance.new('Frame')
-Frame.Size = UDim2.new(0, 250, 0, 45) 
-Frame.Position = UDim2.new(1.1, 0, 0, newYOffset) 
-Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-Frame.BorderSizePixel = 3 
-Frame.BorderColor3 = Color3.fromRGB(30, 144, 255) 
-Frame.Draggable = true 
-Frame.Parent = Notification
-
-local TargetPos = UDim2.new(1, -270, 0, newYOffset) 
-
-local Corner = Instance.new('UICorner')
-Corner.CornerRadius = UDim.new(0, 8) 
-Corner.Parent = Frame
-
-local ProgressBar = Instance.new('Frame')
-ProgressBar.Size = UDim2.new(1, 0, 0, 3) 
-ProgressBar.Position = UDim2.new(0, 0, 1, -3) 
-ProgressBar.BackgroundColor3 = Color3.fromRGB(173, 255, 47) 
-ProgressBar.BorderSizePixel = 0
-ProgressBar.Parent = Frame
-
-local Content = Instance.new('TextLabel')
-Content.Text = 'Purium Executor\nExecuted Script \xE2\x9C\x93' 
-Content.TextColor3 = Color3.fromRGB(50, 255, 50) 
-Content.TextSize = 16
-Content.Font = Enum.Font.SourceSansBold
-Content.TextYAlignment = Enum.TextYAlignment.Center
-Content.TextWrapped = true
-Content.BackgroundTransparency = 1
-Content.Size = UDim2.new(1, 0, 1, -3) 
-Content.Position = UDim2.new(0, 0, 0, 0)
-Content.Parent = Frame
-
-Notification.Parent = PlayerGui
-
--- *****************************************************************
--- 5. HOẠT ẢNH XUẤT HIỆN VÀ BIẾN MẤT
--- *****************************************************************
-
-local function playEntryAnimation()
-    -- Vị trí trượt quá mục tiêu (10px overshoot)
-    local OvershootPos = UDim2.new(1, -280, 0, newYOffset) 
-
-    -- Tween 1: Trượt quá đà (Overshoot)
-    local Tween1Info = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local Tween1 = TweenService:Create(Frame, Tween1Info, {Position = OvershootPos})
-    Tween1:Play()
-    Tween1.Completed:Wait()
-
-    -- Tween 2: Rút về vị trí cuối cùng (Bounce)
-    local Tween2Info = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local Tween2 = TweenService:Create(Frame, Tween2Info, {Position = TargetPos})
-    Tween2:Play()
-    Tween2.Completed:Wait()
-end
-
-local function dismissNotification()
-    if not Frame.Parent then return end 
-
-    -- Tween 3: Thanh tiến trình (2 giây)
-    local ProgressTweenInfo = TweenInfo.new(Duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-    local ProgressTween = TweenService:Create(ProgressBar, ProgressTweenInfo, {Size = UDim2.new(0, 0, 0, 3)})
-    ProgressTween:Play()
+    -- BƯỚC 2: Retreat (Trượt hẳn ra ngoài)
+    local RetreatTime = 0.3
+    local RetreatInfo = TweenInfo.new(RetreatTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
     
-    ProgressTween.Completed:Wait()
-
-    -- Lấy vị trí Y trước khi hủy
-    local yToFill = Frame.Position.Y.Offset 
-
-    -- Tween 4 (Prep-Exit): Nhúc nhích ra ngoài (10px bump)
-    local BumpOutPos = UDim2.new(1, -260, Frame.Position.Y.Scale, Frame.Position.Y.Offset)
-    local BumpTweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local BumpTween = TweenService:Create(Frame, BumpTweenInfo, {Position = BumpOutPos})
-    BumpTween:Play()
-    BumpTween.Completed:Wait()
-
-    -- Tween 5 (Final Retreat): Trượt ra khỏi màn hình
-    local DismissTime = 0.3
-    local DismissInfo = TweenInfo.new(DismissTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local Goal = {
+    local RetreatGoal = {
         Position = UDim2.new(1.1, 0, Frame.Position.Y.Scale, Frame.Position.Y.Offset) 
     }
     
-    local TweenFinal = TweenService:Create(Frame, DismissInfo, Goal)
-    TweenFinal:Play()
+    local RetreatTween = TweenService:Create(Frame, RetreatInfo, RetreatGoal)
+    RetreatTween:Play()
+    RetreatTween.Completed:Wait() 
     
-    TweenFinal.Completed:Wait() 
-    Notification:Destroy()
-
-    -- Kích hoạt dịch chuyển lên sau khi thông báo này biến mất hoàn toàn
-    shiftNotificationsUp(yToFill)
+    -- Dọn dẹp
+    notification:Destroy()
+    
+    -- QUAN TRỌNG: Dịch chuyển các thông báo còn lại lên lấp đầy khoảng trống
+    recalculateAndShiftAll()
 end
 
--- Bắt đầu hoạt ảnh xuất hiện
-playEntryAnimation()
+-- Logic chính để tạo và chạy thông báo
+local function createNotification()
+    -- 1. TẠO ScreenGui
+    local Notification = Instance.new('ScreenGui')
+    Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000))
+    Notification.DisplayOrder = 999 
 
--- Bắt đầu quá trình tự hủy
-dismissNotification()
+    -- 2. TẠO Khung chính (Frame)
+    local Frame = Instance.new('Frame')
+    Frame.Size = UDim2.new(0, 250, 0, FrameHeight) -- Kích thước nhỏ gọn: 250x45
+    Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    Frame.BorderSizePixel = 3 
+    Frame.BorderColor3 = Color3.fromRGB(30, 144, 255) -- DodgerBlue
+    Frame.Draggable = false 
+    Frame.Parent = Notification
+    
+    local Corner = Instance.new('UICorner')
+    Corner.CornerRadius = UDim.new(0, 8) 
+    Corner.Parent = Frame
+
+    -- 3. TẠO Label Nội dung
+    local Header = Instance.new('TextLabel')
+    Header.Text = 'Purium'
+    Header.TextColor3 = Color3.fromRGB(30, 144, 255) -- DodgerBlue
+    Header.TextSize = 14
+    Header.Font = Enum.Font.SourceSansBold
+    Header.BackgroundTransparency = 1
+    Header.Size = UDim2.new(1, 0, 0.5, 0)
+    Header.TextXAlignment = Enum.TextXAlignment.Left
+    Header.TextYAlignment = Enum.TextYAlignment.Top
+    Header.Position = UDim2.new(0.05, 0, 0.1, 0)
+    Header.Parent = Frame
+    
+    local Content = Instance.new('TextLabel')
+    Content.Text = 'Executed Script'
+    Content.TextColor3 = Color3.fromRGB(173, 255, 47) -- Lime Green
+    Content.TextSize = 16
+    Content.Font = Enum.Font.SourceSansBold
+    Content.BackgroundTransparency = 1
+    Content.Size = UDim2.new(1, 0, 0.5, 0)
+    Content.TextXAlignment = Enum.TextXAlignment.Left
+    Content.TextYAlignment = Enum.TextYAlignment.Bottom
+    Content.Position = UDim2.new(0.05, 0, 0.5, 0)
+    Content.Parent = Frame
+    
+    -- 4. TẠO Thanh Tiến Trình (3px Lime)
+    local ProgressBar = Instance.new('Frame')
+    ProgressBar.Name = "ProgressBar"
+    ProgressBar.Size = UDim2.new(1, 0, 0, 3) -- Chiều cao 3px
+    ProgressBar.Position = UDim2.new(0, 0, 1, -3)
+    ProgressBar.BackgroundColor3 = Color3.fromRGB(173, 255, 47) -- Lime Green
+    ProgressBar.BorderSizePixel = 0
+    ProgressBar.Parent = Frame
+
+    Notification.Parent = PlayerGui
+    
+    -- ********************************************
+    -- 5. LOGIC XUẤT HIỆN VÀ NHÚN NHẢY (ENTRY BOUNCE)
+    -- Vị trí khởi điểm (ngoài màn hình, Y target đúng)
+    local index = 1 -- Sẽ được cập nhật ngay sau khi thêm vào danh sách
+    local startYPos = getTargetPosition(index).Y.Offset 
+    Frame.Position = UDim2.new(1.1, 0, 0, startYPos) 
+    
+    -- THÊM VÀO DANH SÁCH & TÍNH TOÁN LẠI VỊ TRÍ
+    recalculateAndShiftAll()
+
+    -- Vị trí mục tiêu cuối cùng sau khi tính toán lại
+    local finalTargetPos = Frame.Position
+
+    -- BƯỚC 1: Overshoot (Trượt quá)
+    local OvershootTime = 0.2
+    local OvershootInfo = TweenInfo.new(OvershootTime, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+    
+    local OvershootGoal = {
+        Position = UDim2.new(1, -280, finalTargetPos.Y.Scale, finalTargetPos.Y.Offset) -- Trượt quá 10px
+    }
+    
+    local OvershootTween = TweenService:Create(Frame, OvershootInfo, OvershootGoal)
+    OvershootTween:Play()
+    OvershootTween.Completed:Wait()
+    
+    -- BƯỚC 2: Retract (Rút về vị trí cuối)
+    local RetractTime = 0.15
+    local RetractInfo = TweenInfo.new(RetractTime, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+    
+    local RetractGoal = {
+        Position = UDim2.new(1, -270, finalTargetPos.Y.Scale, finalTargetPos.Y.Offset) -- Vị trí cuối 
+    }
+    
+    local RetractTween = TweenService:Create(Frame, RetractInfo, RetractGoal)
+    RetractTween:Play()
+    
+    -- ********************************************
+    -- 6. LOGIC THANH TIẾN TRÌNH VÀ TỰ ĐÓNG (4 giây)
+    
+    -- Hoạt ảnh thanh tiến trình (Từ 1 về 0)
+    local ProgressInfo = TweenInfo.new(Duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+    local ProgressGoal = { Size = UDim2.new(0, 0, 0, 3) }
+    
+    local ProgressTween = TweenService:Create(ProgressBar, ProgressInfo, ProgressGoal)
+    
+    -- Chờ hoạt ảnh Retract hoàn tất trước khi chạy tiến trình
+    RetractTween.Completed:Wait() 
+    
+    ProgressTween:Play()
+    ProgressTween.Completed:Wait()
+    
+    -- Tự động đóng sau khi tiến trình hết
+    dismissNotification(Notification)
+end
+
+-- Chạy logic tạo thông báo
+createNotification()
+
+
+---
+
+Mã này là phiên bản cuối cùng và đã được thiết kế để giải quyết lỗi xếp chồng triệt để. Bạn có thể sử dụng toàn bộ nội dung này để cập nhật file Lua trên GitHub của mình. Nếu bạn có bất kỳ thắc mắc nào khác về code, cứ hỏi tôi nhé!
