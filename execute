@@ -15,26 +15,27 @@ for _, child in ipairs(PlayerGui:GetChildren()) do
     if child.Name:sub(1, #NotificationPrefix) == NotificationPrefix and child:IsA('ScreenGui') then
         existingCount = existingCount + 1
         -- Giữ lại tham chiếu đến thông báo đầu tiên tìm thấy (được coi là 'oldest' để hủy)
-        if oldestNotification == nil then
+        if oldestNotification == nil or child.Name < oldestNotification.Name then
+            -- Sử dụng tên có dấu thời gian (tick()) để xác định cái nào cũ hơn
             oldestNotification = child 
         end
     end
 end
 
 if existingCount >= MaxNotifications and oldestNotification then
-    oldestNotification:Destroy() -- Hủy thông báo cũ nhất (đã được tìm thấy đầu tiên)
+    oldestNotification:Destroy() -- Hủy thông báo cũ nhất
 end
 
--- 2. TẠO THÔNG BÁO MỚI 
+-- 2. TẠO THÔNG BÁO MỚI
 local Notification = Instance.new('ScreenGui')
--- Gán tên duy nhất để theo dõi (dùng tick() để đảm bảo tính duy nhất)
+-- Gán tên duy nhất để theo dõi (dùng tick() để đảm bảo tính duy nhất và thứ tự)
 Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000))
 Notification.DisplayOrder = 999 
 
 -- Khung chính của thông báo (Frame)
 local Frame = Instance.new('Frame')
 Frame.Size = UDim2.new(0, 300, 0, 80) -- Kích thước đã điều chỉnh
-Frame.Position = UDim2.new(1, -320, 1, -100) -- Vị trí góc dưới bên phải
+Frame.Position = UDim2.new(1, -320, 0, 20) -- Vị trí góc trên bên phải (cách 20px)
 Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 Frame.BorderSizePixel = 3 -- Độ dày viền 3px
 Frame.BorderColor3 = Color3.fromRGB(30, 144, 255) -- DodgerBlue
@@ -53,9 +54,19 @@ Content.TextColor3 = Color3.fromRGB(50, 255, 50) -- Màu xanh lá cây sáng cho
 Content.TextSize = 20
 Content.Font = Enum.Font.SourceSansBold
 Content.BackgroundTransparency = 1
-Content.Size = UDim2.new(1, 0, 1, 0)
+Content.Size = UDim2.new(1, 0, 1, -5) -- -5 pixels để chừa chỗ cho thanh tiến trình
+Content.TextYAlignment = Enum.TextYAlignment.Center
 Content.Position = UDim2.new(0, 0, 0, 0)
 Content.Parent = Frame
+
+-- Thanh Tiến Trình (Progress Bar) - Nằm ở dưới cùng
+local ProgressBar = Instance.new('Frame')
+ProgressBar.Name = "ProgressBar"
+ProgressBar.BackgroundColor3 = Color3.fromRGB(173, 255, 47) -- Lime Green
+ProgressBar.Size = UDim2.new(1, 0, 0, 5) -- Chiều rộng 100%, Chiều cao 5px
+ProgressBar.Position = UDim2.new(0, 0, 1, -5) -- Đặt ở dưới cùng (cách mép dưới 5px)
+ProgressBar.BorderSizePixel = 0
+ProgressBar.Parent = Frame
 
 -- Hàm xử lý hiệu ứng đóng (Tweening)
 local function dismissNotification()
@@ -75,16 +86,25 @@ local function dismissNotification()
     Notification:Destroy()
 end
 
+-- Tween cho thanh tiến trình
+local function startProgressBar()
+    local Duration = 3 -- 3 giây
+    local ProgressInfo = TweenInfo.new(Duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+    
+    local Goal = {
+        Size = UDim2.new(0, 0, 0, 5) -- Thay đổi chiều rộng từ 1 xuống 0
+    }
+    
+    local ProgressTween = TweenService:Create(ProgressBar, ProgressInfo, Goal)
+    ProgressTween:Play()
+    
+    ProgressTween.Completed:Wait() 
+end
+
 Notification.Parent = PlayerGui
 
--- Tự động đóng sau 3 giây với hiệu ứng
-local startTime = tick()
-local connection
-connection = RunService.Stepped:Connect(function()
-    if tick() - startTime >= 3 and Frame.Parent then
-        connection:Disconnect()
-        dismissNotification()
-    elseif not Frame.Parent then
-        connection:Disconnect()
-    end
-end)
+-- Chạy thanh tiến trình và sau đó đóng thông báo
+coroutine.wrap(function()
+    startProgressBar() -- Bắt đầu thanh tiến trình (chờ 3 giây)
+    dismissNotification() -- Thực hiện hiệu ứng trượt và hủy
+end)()
