@@ -9,63 +9,51 @@ local MaxNotifications = 3 -- GIỚI HẠN TỐI ĐA 3 THÔNG BÁO
 local Duration = 2 -- Thời gian hiển thị 2 giây
 local FrameHeight = 45 -- Chiều cao cố định của Frame
 local Padding = 10 -- Khoảng cách giữa các thông báo
+local BAR_HEIGHT = 2 -- Chiều cao thanh tiến trình (2px - bằng dấu gạch dưới)
 
--- Mảng theo dõi các thông báo đang tồn tại (Sử dụng ScreenGui làm key, nil làm value)
--- **Quan trọng:** Dùng để theo dõi thứ tự và sự tồn tại của các thông báo
-local ActiveNotifications = {} 
-
--- Tính toán vị trí Y cuối cùng của thông báo thứ N (tính từ trên xuống)
+-- Hàm tính toán vị trí Y cuối cùng của thông báo thứ N (tính từ trên xuống)
 local function getTargetPosition(index)
-    -- Vị trí gốc (Top Right): UDim2.new(1, -320, 0, 20)
-    -- Vị trí dịch chuyển xuống: index * (FrameHeight + Padding)
+    -- Vị trí gốc (Top Right): UDim2.new(1, -270, 0, 20)
+    -- Vị trí dịch chuyển xuống: 20px (margin trên) + (index - 1) * (FrameHeight + Padding)
     local yOffset = 20 + (index - 1) * (FrameHeight + Padding)
     return UDim2.new(1, -270, 0, yOffset) -- Rộng 250px -> offset -270 (250 + 20 margin)
 end
 
--- Hàm quan trọng: Tính toán lại và Dịch chuyển tất cả thông báo lên/xuống
-local function recalculateAndShiftAll()
-    -- Lấy tất cả các ScreenGui đang tồn tại có tiền tố
-    local currentNotifications = {}
+-- Mảng chứa các ScreenGui hiện tại để quản lý thứ tự và vị trí
+local function getActiveNotifications()
+    local notifications = {}
     for _, child in ipairs(PlayerGui:GetChildren()) do
         if child.Name:sub(1, #NotificationPrefix) == NotificationPrefix and child:IsA('ScreenGui') then
-            table.insert(currentNotifications, child)
+            table.insert(notifications, child)
         end
     end
-
-    -- Sắp xếp chúng theo thứ tự tạo (DisplayName, giả sử tick() là tăng dần)
-    table.sort(currentNotifications, function(a, b)
-        return tonumber(a.Name:gsub(NotificationPrefix, '')) < tonumber(b.Name:gsub(NotificationPrefix, ''))
+    -- Sắp xếp theo thứ tự tạo (DisplayName, giả sử tick() là tăng dần)
+    table.sort(notifications, function(a, b)
+        -- Chuyển phần sau prefix thành số để so sánh thứ tự thời gian tạo
+        local timeA = tonumber(a.Name:match(NotificationPrefix .. '(%d+)')) or 0
+        local timeB = tonumber(b.Name:match(NotificationPrefix .. '(%d+)')) or 0
+        return timeA < timeB
     end)
+    return notifications
+end
+
+-- Hàm quan trọng: Tính toán lại và Dịch chuyển tất cả thông báo lên/xuống
+local function recalculateAndShiftAll()
+    local currentNotifications = getActiveNotifications()
     
     -- Áp dụng Tween cho từng thông báo để dịch chuyển lên
     for index, notification in ipairs(currentNotifications) do
         local frame = notification:FindFirstChild('Frame')
         if frame then
             local targetPos = getTargetPosition(index)
-            local ShiftInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            local ShiftInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out) -- 0.2s dịch chuyển mượt mà
             TweenService:Create(frame, ShiftInfo, { Position = targetPos }):Play()
-        end
-    end
-    
-    -- Quản lý giới hạn tối đa (MaxNotifications)
-    if #currentNotifications > MaxNotifications then
-        -- Lấy thông báo cũ nhất (thông báo đầu tiên trong mảng đã sắp xếp)
-        local oldest = currentNotifications[1]
-        if oldest then
-            -- Tắt ngay lập tức để tạo chỗ trống
-            local frame = oldest:FindFirstChild('Frame')
-            if frame then
-                frame.Visible = false
-            end
-            oldest:Destroy()
-            -- Sau khi hủy, hàm này sẽ tự gọi lại (hoặc được gọi ngay sau đó)
-            -- để dịch chuyển các thông báo còn lại lên, nhưng logic tiếp theo sẽ đảm bảo điều đó.
         end
     end
 end
 
 -- Hàm xử lý hiệu ứng đóng (Tweening) và dọn dẹp
-local function dismissNotification(notification)
+local function dismissNotification(notification, shouldShiftUp)
     local Frame = notification:FindFirstChild('Frame')
     if not Frame or not Frame.Parent then return end 
 
@@ -97,17 +85,30 @@ local function dismissNotification(notification)
     notification:Destroy()
     
     -- QUAN TRỌNG: Dịch chuyển các thông báo còn lại lên lấp đầy khoảng trống
-    recalculateAndShiftAll()
+    if shouldShiftUp then
+        recalculateAndShiftAll()
+    end
 end
 
 -- Logic chính để tạo và chạy thông báo
 local function createNotification()
-    -- 1. TẠO ScreenGui
+    local currentNotifications = getActiveNotifications()
+
+    -- 1. XỬ LÝ GIỚI HẠN TỐI ĐA (MAX 3)
+    if #currentNotifications >= MaxNotifications then
+        local oldest = currentNotifications[1] -- Thông báo cũ nhất đã được sắp xếp
+        if oldest then
+            -- Hủy thông báo cũ nhất mà không chờ đợi (để tạo chỗ trống ngay lập tức)
+            oldest:Destroy()
+            -- LÚC NÀY, các thông báo còn lại sẽ được dịch chuyển lên ngay sau đó
+        end
+    end
+    
+    -- 2. TẠO ScreenGui VÀ FRAME MỚI
     local Notification = Instance.new('ScreenGui')
-    Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000))
+    Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000)) -- Gán tên duy nhất
     Notification.DisplayOrder = 999 
 
-    -- 2. TẠO Khung chính (Frame)
     local Frame = Instance.new('Frame')
     Frame.Size = UDim2.new(0, 250, 0, FrameHeight) -- Kích thước nhỏ gọn: 250x45
     Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
@@ -120,10 +121,10 @@ local function createNotification()
     Corner.CornerRadius = UDim.new(0, 8) 
     Corner.Parent = Frame
 
-    -- 3. TẠO Label Nội dung
+    -- Label Nội dung
     local Header = Instance.new('TextLabel')
     Header.Text = 'Purium'
-    Header.TextColor3 = Color3.fromRGB(30, 144, 255) -- DodgerBlue
+    Header.TextColor3 = Color3.fromRGB(30, 144, 255) 
     Header.TextSize = 14
     Header.Font = Enum.Font.SourceSansBold
     Header.BackgroundTransparency = 1
@@ -134,7 +135,7 @@ local function createNotification()
     Header.Parent = Frame
     
     local Content = Instance.new('TextLabel')
-    Content.Text = 'Executed Script'
+    Content.Text = 'Executed Script ✓'
     Content.TextColor3 = Color3.fromRGB(173, 255, 47) -- Lime Green
     Content.TextSize = 16
     Content.Font = Enum.Font.SourceSansBold
@@ -145,28 +146,31 @@ local function createNotification()
     Content.Position = UDim2.new(0.05, 0, 0.5, 0)
     Content.Parent = Frame
     
-    -- 4. TẠO Thanh Tiến Trình (3px Lime)
+    -- Thanh Tiến Trình (2px Lime)
     local ProgressBar = Instance.new('Frame')
     ProgressBar.Name = "ProgressBar"
-    ProgressBar.Size = UDim2.new(1, 0, 0, 3) -- Chiều cao 3px
-    ProgressBar.Position = UDim2.new(0, 0, 1, -3)
-    ProgressBar.BackgroundColor3 = Color3.fromRGB(173, 255, 47) -- Lime Green
+    ProgressBar.Size = UDim2.new(1, 0, 0, BAR_HEIGHT) -- Chiều cao 2px
+    ProgressBar.Position = UDim2.new(0, 0, 1, -BAR_HEIGHT)
+    ProgressBar.BackgroundColor3 = Color3.fromRGB(173, 255, 47) 
     ProgressBar.BorderSizePixel = 0
     ProgressBar.Parent = Frame
 
     Notification.Parent = PlayerGui
     
     -- ********************************************
-    -- 5. LOGIC XUẤT HIỆN VÀ NHÚN NHẢY (ENTRY BOUNCE)
-    -- Vị trí khởi điểm (ngoài màn hình, Y target đúng)
-    local index = 1 -- Sẽ được cập nhật ngay sau khi thêm vào danh sách
-    local startYPos = getTargetPosition(index).Y.Offset 
-    Frame.Position = UDim2.new(1.1, 0, 0, startYPos) 
+    -- LOGIC XUẤT HIỆN VÀ NHÚN NHẢY (ENTRY BOUNCE)
     
-    -- THÊM VÀO DANH SÁCH & TÍNH TOÁN LẠI VỊ TRÍ
+    -- Đặt vị trí khởi điểm cho hoạt ảnh (ngoài màn hình)
+    local tempNotifications = getActiveNotifications()
+    local currentMaxIndex = #tempNotifications 
+    local startYPos = getTargetPosition(currentMaxIndex).Y.Offset -- Vị trí Y mục tiêu mới
+    
+    Frame.Position = UDim2.new(1.1, 0, 0, startYPos) -- Bắt đầu từ ngoài bên phải
+    
+    -- TÍNH TOÁN LẠI VỊ TRÍ (Đảm bảo tất cả dịch chuyển lên và thông báo mới ở đúng vị trí cuối)
     recalculateAndShiftAll()
 
-    -- Vị trí mục tiêu cuối cùng sau khi tính toán lại
+    -- Vị trí mục tiêu cuối cùng sau khi tính toán lại (Nó đã được dịch chuyển lên đúng vị trí)
     local finalTargetPos = Frame.Position
 
     -- BƯỚC 1: Overshoot (Trượt quá)
@@ -193,11 +197,11 @@ local function createNotification()
     RetractTween:Play()
     
     -- ********************************************
-    -- 6. LOGIC THANH TIẾN TRÌNH VÀ TỰ ĐÓNG (4 giây)
+    -- LOGIC THANH TIẾN TRÌNH VÀ TỰ ĐÓNG (2 giây)
     
     -- Hoạt ảnh thanh tiến trình (Từ 1 về 0)
     local ProgressInfo = TweenInfo.new(Duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-    local ProgressGoal = { Size = UDim2.new(0, 0, 0, 3) }
+    local ProgressGoal = { Size = UDim2.new(0, 0, 0, BAR_HEIGHT) }
     
     local ProgressTween = TweenService:Create(ProgressBar, ProgressInfo, ProgressGoal)
     
@@ -207,14 +211,9 @@ local function createNotification()
     ProgressTween:Play()
     ProgressTween.Completed:Wait()
     
-    -- Tự động đóng sau khi tiến trình hết
-    dismissNotification(Notification)
+    -- Tự động đóng sau khi tiến trình hết, kích hoạt dịch chuyển lên
+    dismissNotification(Notification, true)
 end
 
 -- Chạy logic tạo thông báo
 createNotification()
-
-
----
-
-Mã này là phiên bản cuối cùng và đã được thiết kế để giải quyết lỗi xếp chồng triệt để. Bạn có thể sử dụng toàn bộ nội dung này để cập nhật file Lua trên GitHub của mình. Nếu bạn có bất kỳ thắc mắc nào khác về code, cứ hỏi tôi nhé!
