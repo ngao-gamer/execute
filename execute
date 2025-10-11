@@ -1,219 +1,110 @@
 local TweenService = game:GetService('TweenService') 
 local RunService = game:GetService('RunService')
-local Players = game:GetService('Players')
 
-local Player = Players.LocalPlayer
+local Player = game:GetService('Players').LocalPlayer
 local PlayerGui = Player:WaitForChild('PlayerGui')
 local NotificationPrefix = 'ExecutedNotification_'
-local MaxNotifications = 3 -- GIỚI HẠN TỐI ĐA 3 THÔNG BÁO
-local Duration = 2 -- Thời gian hiển thị 2 giây
-local FrameHeight = 45 -- Chiều cao cố định của Frame
-local Padding = 10 -- Khoảng cách giữa các thông báo
-local BAR_HEIGHT = 2 -- Chiều cao thanh tiến trình (2px - bằng dấu gạch dưới)
+local MaxNotifications = 3
 
--- Hàm tính toán vị trí Y cuối cùng của thông báo thứ N (tính từ trên xuống)
-local function getTargetPosition(index)
-    -- Vị trí gốc (Top Right): UDim2.new(1, -270, 0, 20)
-    -- Vị trí dịch chuyển xuống: 20px (margin trên) + (index - 1) * (FrameHeight + Padding)
-    local yOffset = 20 + (index - 1) * (FrameHeight + Padding)
-    return UDim2.new(1, -270, 0, yOffset) -- Rộng 250px -> offset -270 (250 + 20 margin)
-end
+-- 1. KIỂM TRA VÀ HỦY THÔNG BÁO CŨ NHẤT NẾU VƯỢT QUÁ GIỚI HẠN (MAX 4)
+local existingCount = 0
+local oldestNotification = nil 
 
--- Mảng chứa các ScreenGui hiện tại để quản lý thứ tự và vị trí
-local function getActiveNotifications()
-    local notifications = {}
-    for _, child in ipairs(PlayerGui:GetChildren()) do
-        if child.Name:sub(1, #NotificationPrefix) == NotificationPrefix and child:IsA('ScreenGui') then
-            table.insert(notifications, child)
-        end
-    end
-    -- Sắp xếp theo thứ tự tạo (DisplayName, giả sử tick() là tăng dần)
-    table.sort(notifications, function(a, b)
-        -- Chuyển phần sau prefix thành số để so sánh thứ tự thời gian tạo
-        local timeA = tonumber(a.Name:match(NotificationPrefix .. '(%d+)')) or 0
-        local timeB = tonumber(b.Name:match(NotificationPrefix .. '(%d+)')) or 0
-        return timeA < timeB
-    end)
-    return notifications
-end
-
--- Hàm quan trọng: Tính toán lại và Dịch chuyển tất cả thông báo lên/xuống
-local function recalculateAndShiftAll()
-    local currentNotifications = getActiveNotifications()
-    
-    -- Áp dụng Tween cho từng thông báo để dịch chuyển lên
-    for index, notification in ipairs(currentNotifications) do
-        local frame = notification:FindFirstChild('Frame')
-        if frame then
-            local targetPos = getTargetPosition(index)
-            local ShiftInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out) -- 0.2s dịch chuyển mượt mà
-            TweenService:Create(frame, ShiftInfo, { Position = targetPos }):Play()
+for _, child in ipairs(PlayerGui:GetChildren()) do
+    -- Kiểm tra tiền tố và loại đối tượng
+    if child.Name:sub(1, #NotificationPrefix) == NotificationPrefix and child:IsA('ScreenGui') then
+        existingCount = existingCount + 1
+        -- Sử dụng tên có dấu thời gian (tick()) để xác định cái nào cũ hơn
+        if oldestNotification == nil or child.Name < oldestNotification.Name then
+            oldestNotification = child 
         end
     end
 end
 
--- Hàm xử lý hiệu ứng đóng (Tweening) và dọn dẹp
-local function dismissNotification(notification, shouldShiftUp)
-    local Frame = notification:FindFirstChild('Frame')
-    if not Frame or not Frame.Parent then return end 
+if existingCount >= MaxNotifications and oldestNotification then
+    oldestNotification:Destroy() -- Hủy thông báo cũ nhất
+end
 
-    -- BƯỚC 1: Prep-Exit (Nhún nhẹ ra ngoài)
-    local PrepExitTime = 0.15
-    local PrepExitInfo = TweenInfo.new(PrepExitTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+-- 2. TẠO THÔNG BÁO MỚI
+local Notification = Instance.new('ScreenGui')
+-- Gán tên duy nhất để theo dõi (dùng tick() để đảm bảo tính duy nhất và thứ tự)
+Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000))
+Notification.DisplayOrder = 999 
+
+-- Khung chính của thông báo (Frame)
+local Frame = Instance.new('Frame')
+Frame.Size = UDim2.new(0, 300, 0, 80) -- Kích thước mặc định
+Frame.Position = UDim2.new(1, -320, 0, 20) -- Vị trí góc trên bên phải (cách 20px)
+Frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35) -- Tối hơn để tăng độ tương phản
+Frame.BorderSizePixel = 5 -- QUAN TRỌNG: Tăng độ dày viền lên 5px
+Frame.BorderColor3 = Color3.fromRGB(30, 144, 255) -- DodgerBlue (Màu xanh sáng)
+Frame.Draggable = true 
+Frame.Parent = Notification
+
+-- Thêm góc bo tròn (UI Corner)
+local Corner = Instance.new('UICorner')
+Corner.CornerRadius = UDim.new(0, 8) 
+Corner.Parent = Frame
+
+-- Label Nội dung chính: Executed ✓
+local Content = Instance.new('TextLabel')
+Content.Text = 'Executed ✓'
+Content.TextColor3 = Color3.fromRGB(173, 255, 47) -- Lime Green sáng
+Content.TextSize = 24 -- Tăng cỡ chữ để trông hiện đại hơn
+Content.Font = Enum.Font.SourceSansBold
+Content.BackgroundTransparency = 1
+-- Đã điều chỉnh chiều cao của Content để chừa chỗ 2px cho thanh tiến trình
+Content.Size = UDim2.new(1, 0, 1, -2) 
+Content.TextYAlignment = Enum.TextYAlignment.Center
+Content.Position = UDim2.new(0, 0, 0, 0)
+Content.Parent = Frame
+
+-- Thanh Tiến Trình (Progress Bar) - Nằm ở dưới cùng
+local ProgressBar = Instance.new('Frame')
+ProgressBar.Name = "ProgressBar"
+ProgressBar.BackgroundColor3 = Color3.fromRGB(30, 144, 255) -- Dùng màu viền cho Progress Bar
+ProgressBar.Size = UDim2.new(1, 0, 0, 2) -- ĐIỀU CHỈNH: Chiều cao 2px
+ProgressBar.Position = UDim2.new(0, 0, 1, -2) -- Đặt ở dưới cùng (cách mép dưới 2px)
+ProgressBar.BorderSizePixel = 0
+ProgressBar.Parent = Frame
+
+-- Hàm xử lý hiệu ứng đóng (Tweening)
+local function dismissNotification()
+    if not Frame.Parent then return end 
+
+    local DismissTime = 0.3
+    local DismissInfo = TweenInfo.new(DismissTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     
-    local PrepExitGoal = {
-        Position = UDim2.new(1.05, -270, Frame.Position.Y.Scale, Frame.Position.Y.Offset) 
-    }
-    
-    local PrepExitTween = TweenService:Create(Frame, PrepExitInfo, PrepExitGoal)
-    PrepExitTween:Play()
-    PrepExitTween.Completed:Wait() 
-    
-    -- BƯỚC 2: Retreat (Trượt hẳn ra ngoài)
-    local RetreatTime = 0.3
-    local RetreatInfo = TweenInfo.new(RetreatTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-    
-    local RetreatGoal = {
+    local Goal = {
         Position = UDim2.new(1.1, 0, Frame.Position.Y.Scale, Frame.Position.Y.Offset) 
     }
     
-    local RetreatTween = TweenService:Create(Frame, RetreatInfo, RetreatGoal)
-    RetreatTween:Play()
-    RetreatTween.Completed:Wait() 
+    local Tween = TweenService:Create(Frame, DismissInfo, Goal)
+    Tween:Play()
     
-    -- Dọn dẹp
-    notification:Destroy()
-    
-    -- QUAN TRỌNG: Dịch chuyển các thông báo còn lại lên lấp đầy khoảng trống
-    if shouldShiftUp then
-        recalculateAndShiftAll()
-    end
+    Tween.Completed:Wait() 
+    Notification:Destroy()
 end
 
--- Logic chính để tạo và chạy thông báo
-local function createNotification()
-    local currentNotifications = getActiveNotifications()
-
-    -- 1. XỬ LÝ GIỚI HẠN TỐI ĐA (MAX 3)
-    if #currentNotifications >= MaxNotifications then
-        local oldest = currentNotifications[1] -- Thông báo cũ nhất đã được sắp xếp
-        if oldest then
-            -- Hủy thông báo cũ nhất mà không chờ đợi (để tạo chỗ trống ngay lập tức)
-            oldest:Destroy()
-            -- LÚC NÀY, các thông báo còn lại sẽ được dịch chuyển lên ngay sau đó
-        end
-    end
-    
-    -- 2. TẠO ScreenGui VÀ FRAME MỚI
-    local Notification = Instance.new('ScreenGui')
-    Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000)) -- Gán tên duy nhất
-    Notification.DisplayOrder = 999 
-
-    local Frame = Instance.new('Frame')
-    Frame.Size = UDim2.new(0, 250, 0, FrameHeight) -- Kích thước nhỏ gọn: 250x45
-    Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    Frame.BorderSizePixel = 3 
-    Frame.BorderColor3 = Color3.fromRGB(30, 144, 255) -- DodgerBlue
-    Frame.Draggable = false 
-    Frame.Parent = Notification
-    
-    local Corner = Instance.new('UICorner')
-    Corner.CornerRadius = UDim.new(0, 8) 
-    Corner.Parent = Frame
-
-    -- Label Nội dung
-    local Header = Instance.new('TextLabel')
-    Header.Text = 'Purium'
-    Header.TextColor3 = Color3.fromRGB(30, 144, 255) 
-    Header.TextSize = 14
-    Header.Font = Enum.Font.SourceSansBold
-    Header.BackgroundTransparency = 1
-    Header.Size = UDim2.new(1, 0, 0.5, 0)
-    Header.TextXAlignment = Enum.TextXAlignment.Left
-    Header.TextYAlignment = Enum.TextYAlignment.Top
-    Header.Position = UDim2.new(0.05, 0, 0.1, 0)
-    Header.Parent = Frame
-    
-    local Content = Instance.new('TextLabel')
-    Content.Text = 'Executed Script ✓'
-    Content.TextColor3 = Color3.fromRGB(173, 255, 47) -- Lime Green
-    Content.TextSize = 16
-    Content.Font = Enum.Font.SourceSansBold
-    Content.BackgroundTransparency = 1
-    Content.Size = UDim2.new(1, 0, 0.5, 0)
-    Content.TextXAlignment = Enum.TextXAlignment.Left
-    Content.TextYAlignment = Enum.TextYAlignment.Bottom
-    Content.Position = UDim2.new(0.05, 0, 0.5, 0)
-    Content.Parent = Frame
-    
-    -- Thanh Tiến Trình (2px Lime)
-    local ProgressBar = Instance.new('Frame')
-    ProgressBar.Name = "ProgressBar"
-    ProgressBar.Size = UDim2.new(1, 0, 0, BAR_HEIGHT) -- Chiều cao 2px
-    ProgressBar.Position = UDim2.new(0, 0, 1, -BAR_HEIGHT)
-    ProgressBar.BackgroundColor3 = Color3.fromRGB(173, 255, 47) 
-    ProgressBar.BorderSizePixel = 0
-    ProgressBar.Parent = Frame
-
-    Notification.Parent = PlayerGui
-    
-    -- ********************************************
-    -- LOGIC XUẤT HIỆN VÀ NHÚN NHẢY (ENTRY BOUNCE)
-    
-    -- Đặt vị trí khởi điểm cho hoạt ảnh (ngoài màn hình)
-    local tempNotifications = getActiveNotifications()
-    local currentMaxIndex = #tempNotifications 
-    local startYPos = getTargetPosition(currentMaxIndex).Y.Offset -- Vị trí Y mục tiêu mới
-    
-    Frame.Position = UDim2.new(1.1, 0, 0, startYPos) -- Bắt đầu từ ngoài bên phải
-    
-    -- TÍNH TOÁN LẠI VỊ TRÍ (Đảm bảo tất cả dịch chuyển lên và thông báo mới ở đúng vị trí cuối)
-    recalculateAndShiftAll()
-
-    -- Vị trí mục tiêu cuối cùng sau khi tính toán lại (Nó đã được dịch chuyển lên đúng vị trí)
-    local finalTargetPos = Frame.Position
-
-    -- BƯỚC 1: Overshoot (Trượt quá)
-    local OvershootTime = 0.2
-    local OvershootInfo = TweenInfo.new(OvershootTime, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-    
-    local OvershootGoal = {
-        Position = UDim2.new(1, -280, finalTargetPos.Y.Scale, finalTargetPos.Y.Offset) -- Trượt quá 10px
-    }
-    
-    local OvershootTween = TweenService:Create(Frame, OvershootInfo, OvershootGoal)
-    OvershootTween:Play()
-    OvershootTween.Completed:Wait()
-    
-    -- BƯỚC 2: Retract (Rút về vị trí cuối)
-    local RetractTime = 0.15
-    local RetractInfo = TweenInfo.new(RetractTime, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
-    
-    local RetractGoal = {
-        Position = UDim2.new(1, -270, finalTargetPos.Y.Scale, finalTargetPos.Y.Offset) -- Vị trí cuối 
-    }
-    
-    local RetractTween = TweenService:Create(Frame, RetractInfo, RetractGoal)
-    RetractTween:Play()
-    
-    -- ********************************************
-    -- LOGIC THANH TIẾN TRÌNH VÀ TỰ ĐÓNG (2 giây)
-    
-    -- Hoạt ảnh thanh tiến trình (Từ 1 về 0)
+-- Tween cho thanh tiến trình
+local function startProgressBar()
+    local Duration = 2.3 -- 3 giây
     local ProgressInfo = TweenInfo.new(Duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-    local ProgressGoal = { Size = UDim2.new(0, 0, 0, BAR_HEIGHT) }
     
-    local ProgressTween = TweenService:Create(ProgressBar, ProgressInfo, ProgressGoal)
+    local Goal = {
+        Size = UDim2.new(0, 0, 0, 2) -- ĐIỀU CHỈNH: Mục tiêu chiều cao 2px
+    }
     
-    -- Chờ hoạt ảnh Retract hoàn tất trước khi chạy tiến trình
-    RetractTween.Completed:Wait() 
-    
+    local ProgressTween = TweenService:Create(ProgressBar, ProgressInfo, Goal)
     ProgressTween:Play()
-    ProgressTween.Completed:Wait()
     
-    -- Tự động đóng sau khi tiến trình hết, kích hoạt dịch chuyển lên
-    dismissNotification(Notification, true)
+    ProgressTween.Completed:Wait() 
 end
 
--- Chạy logic tạo thông báo
-createNotification()
+Notification.Parent = PlayerGui
+
+-- Chạy thanh tiến trình và sau đó đóng thông báo
+coroutine.wrap(function()
+    startProgressBar() -- Bắt đầu thanh tiến trình (chờ 3 giây)
+    dismissNotification() -- Thực hiện hiệu ứng trượt và hủy
+end)()
