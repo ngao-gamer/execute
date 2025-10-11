@@ -1,0 +1,138 @@
+local TweenService = game:GetService('TweenService') 
+local RunService = game:GetService('RunService')
+
+local Player = game:GetService('Players').LocalPlayer
+local PlayerGui = Player:WaitForChild('PlayerGui')
+local NotificationPrefix = 'InjectedNotification_' -- Vẫn giữ prefix để tránh xung đột
+
+local NOTIFICATION_WIDTH = 280
+local MAIN_HEIGHT = 45
+local VERSION_HEIGHT = 20
+local TOTAL_HEIGHT = MAIN_HEIGHT + VERSION_HEIGHT + 2 -- +2 là khoảng cách giữa 2 frame
+local BORDER_THICKNESS = 5
+local MARGIN_RIGHT = 20
+local TIME_TO_LIVE = 3.0 -- Tự đóng sau 3 giây
+
+-- Vị trí xuất hiện cố định, không cần tính toán dịch chuyển phức tạp nữa
+local INITIAL_Y = MARGIN_RIGHT 
+
+-- TẠO VÀ HIỂN THỊ THÔNG BÁO (Đã loại bỏ logic xếp chồng và quản lý giới hạn)
+local function createInjectedNotification(mainText, versionText)
+    
+    -- Xóa bất kỳ thông báo cũ nào cùng loại nếu tồn tại (để đảm bảo không có lỗi)
+    for _, child in ipairs(PlayerGui:GetChildren()) do
+        if child.Name:sub(1, #NotificationPrefix) == NotificationPrefix and child:IsA('ScreenGui') then
+            child:Destroy()
+        end
+    end
+
+    local Notification = Instance.new('ScreenGui')
+    Notification.Name = NotificationPrefix .. tostring(math.floor(tick() * 1000))
+    Notification.DisplayOrder = 999 
+
+    local MainFrame = Instance.new('Frame')
+    MainFrame.Name = "MainFrame"
+    MainFrame.Size = UDim2.new(0, NOTIFICATION_WIDTH, 0, TOTAL_HEIGHT) 
+    -- Vị trí ban đầu: Luôn xuất hiện tại INITIAL_Y (20px từ trên xuống)
+    MainFrame.Position = UDim2.new(1, 10, 0, INITIAL_Y) 
+    MainFrame.BackgroundTransparency = 1
+    MainFrame.Parent = Notification
+
+    -- FRAME CHÍNH (Thông báo INJECT)
+    local InjectFrame = Instance.new('Frame')
+    InjectFrame.Size = UDim2.new(1, 0, 0, MAIN_HEIGHT)
+    InjectFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35) 
+    InjectFrame.BorderSizePixel = BORDER_THICKNESS
+    InjectFrame.BorderColor3 = Color3.fromRGB(30, 144, 255)
+    InjectFrame.Parent = MainFrame
+    
+    local Corner = Instance.new('UICorner')
+    Corner.CornerRadius = UDim.new(0, 8) 
+    Corner.Parent = InjectFrame
+
+    local Content = Instance.new('TextLabel')
+    Content.Text = mainText
+    Content.TextColor3 = Color3.fromRGB(173, 255, 47)
+    Content.TextSize = 20
+    Content.Font = Enum.Font.SourceSansBold
+    Content.BackgroundTransparency = 1
+    Content.Size = UDim2.new(1, 0, 1, 0) 
+    Content.TextXAlignment = Enum.TextXAlignment.Left
+    Content.Position = UDim2.new(0, 10, 0, 0) 
+    Content.Parent = InjectFrame
+
+    -- FRAME VERSION (Thông báo phụ)
+    local VersionFrame = Instance.new('Frame')
+    VersionFrame.Size = UDim2.new(1, 0, 0, VERSION_HEIGHT)
+    VersionFrame.Position = UDim2.new(0, 0, 0, MAIN_HEIGHT + 2) 
+    VersionFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50) 
+    VersionFrame.BorderSizePixel = 0
+    VersionFrame.Parent = MainFrame
+    
+    local VersionLabel = Instance.new('TextLabel')
+    VersionLabel.Text = versionText
+    VersionLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    VersionLabel.TextSize = 14
+    VersionLabel.Font = Enum.Font.SourceSans
+    VersionLabel.BackgroundTransparency = 1
+    VersionLabel.Size = UDim2.new(1, 0, 1, 0) 
+    VersionLabel.TextXAlignment = Enum.TextXAlignment.Right
+    VersionLabel.Position = UDim2.new(0, -10, 0, 0) 
+    VersionLabel.Parent = VersionFrame
+
+    -- Thanh Tiến Trình (ProgressBar)
+    local ProgressBar = Instance.new('Frame')
+    ProgressBar.Name = "ProgressBar"
+    ProgressBar.BackgroundColor3 = Color3.fromRGB(30, 144, 255)
+    ProgressBar.Size = UDim2.new(1, 0, 0, 2) 
+    ProgressBar.Position = UDim2.new(0, 0, 1, -2)
+    ProgressBar.BorderSizePixel = 0
+    ProgressBar.Parent = InjectFrame
+
+    Notification.Parent = PlayerGui
+    
+    -- HOẠT ẢNH XUẤT HIỆN VÀ NHẢY (BOUNCING)
+    local function playBouncingAnimation(frame)
+        local initialPos = UDim2.new(1, -MARGIN_RIGHT - NOTIFICATION_WIDTH, 0, INITIAL_Y)
+        local overshootPos = UDim2.new(1, -MARGIN_RIGHT - NOTIFICATION_WIDTH - 15, 0, INITIAL_Y) -- Nhảy ra xa hơn
+        local finalPos = UDim2.new(1, -MARGIN_RIGHT - NOTIFICATION_WIDTH, 0, INITIAL_Y)
+        
+        -- 1. Trượt vào (overshoot)
+        local tweenIn = TweenService:Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.OutQuad), {Position = overshootPos})
+        tweenIn:Play()
+        tweenIn.Completed:Wait()
+        
+        -- 2. Nhảy lùi lại (bounce back)
+        local tweenBounce = TweenService:Create(frame, TweenInfo.new(0.2, Enum.EasingStyle.OutQuad), {Position = finalPos})
+        tweenBounce:Play()
+        tweenBounce.Completed:Wait()
+    end
+    
+    -- Hiển thị thông báo, chạy hoạt ảnh
+    coroutine.wrap(function()
+        -- 1. Chạy hiệu ứng trượt và nhảy (Bounce)
+        playBouncingAnimation(MainFrame)
+
+        -- 2. Chạy thanh tiến trình (Duration: TIME_TO_LIVE)
+        local Duration = TIME_TO_LIVE
+        local ProgressInfo = TweenInfo.new(Duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+        local Goal = { Size = UDim2.new(0, 0, 0, 2) }
+        local ProgressTween = TweenService:Create(ProgressBar, ProgressInfo, Goal)
+        ProgressTween:Play()
+        
+        ProgressTween.Completed:Wait() 
+        
+        -- 3. Đóng thông báo
+        local DismissTime = 0.3
+        local DismissInfo = TweenInfo.new(DismissTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        local DismissGoal = { Position = UDim2.new(1.1, 0, MainFrame.Position.Y.Scale, MainFrame.Position.Y.Offset) }
+        local DismissTween = TweenService:Create(MainFrame, DismissInfo, DismissGoal)
+        DismissTween:Play()
+        DismissTween.Completed:Wait()
+        
+        Notification:Destroy()
+    end)()
+end
+
+-- Gọi hàm tạo thông báo chính
+createInjectedNotification('Purium Executor | INJECTED ✅', 'Version: 1.0.6')
